@@ -106,6 +106,7 @@ describe('#crud-objection', () => {
           .get('/companies')
           .query(query)
           .end((_, res) => {
+            expect(res.body.message).toBe(`Invalid column name 'invalid'`);
             expect(res.status).toBe(400);
             done();
           });
@@ -276,6 +277,9 @@ describe('#crud-objection', () => {
           .get('/users/1')
           .query(query)
           .end((_, res) => {
+            expect(res.body.message).toBe(
+              `Too many nested levels! Usage: '[join=<other-relation>&]join=[<other-relation>.]<relation>&filter=<relation>.<field>||op||val'`,
+            );
             expect(res.status).toBe(400);
             done();
           });
@@ -294,6 +298,7 @@ describe('#crud-objection', () => {
           .get('/users/1')
           .query(query)
           .end((_, res) => {
+            expect(res.body.message).toBe(`Invalid relation name 'invalid'`);
             expect(res.status).toBe(400);
             done();
           });
@@ -312,6 +317,9 @@ describe('#crud-objection', () => {
           .get('/users/1')
           .query(query)
           .end((_, res) => {
+            expect(res.body.message).toBe(
+              `Invalid column name 'foo' for relation 'company'`,
+            );
             expect(res.status).toBe(400);
             done();
           });

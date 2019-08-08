@@ -16,7 +16,7 @@ import {
 import {
   hasLength,
   isArrayFull,
-  isNil,
+  isObjectFull,
   isObject,
   isUndefined,
   objKeys,
@@ -26,6 +26,7 @@ import {
   ModelClass,
   QueryBuilder,
   Relation as ObjectionRelation,
+  Transaction,
   transaction,
 } from 'objection';
 import { OnModuleInit } from '@nestjs/common';
@@ -38,6 +39,8 @@ interface ModelRelation {
   columns: string[];
   referencedColumns: string[];
 }
+
+const CHUNK_SIZE = 10000;
 
 const OPERATORS: {
   [operator: string]: (
@@ -149,11 +152,11 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
 
   async onModuleInit() {
     await this.fetchTableMetadata(this.modelClass.tableName);
-    await this.onInitMapRelations();
-    await this.onInitMapEntityColumns();
+    await this.initRelations();
+    await this.initEntityColumns();
   }
 
-  async fetchTableMetadata(tableName: string) {
+  private async fetchTableMetadata(tableName: string) {
     return Model.fetchTableMetadata({ table: tableName });
   }
 
@@ -179,13 +182,24 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     return (modelClass as any).getRelations();
   }
 
+  public async withTransaction<R>(
+    callback: (innerTrx) => Promise<R>,
+    trx?: Transaction,
+  ): Promise<R> {
+    return transaction(trx || this.modelClass.knex(), (innerTrx) => callback(innerTrx));
+  }
+
   /**
    * Get many
    * @param req
+   * @param trx
    */
-  public async getMany(req: CrudRequest): Promise<GetManyDefaultResponse<T> | T[]> {
+  public async getMany(
+    req: CrudRequest,
+    trx?: Transaction,
+  ): Promise<GetManyDefaultResponse<T> | T[]> {
     const { parsed, options } = req;
-    const { builder } = await this.createBuilder(parsed, options);
+    const { builder } = await this.createBuilder(parsed, options, { trx });
 
     const { offset, limit } = getOffsetLimit(parsed, options);
     if (Number.isFinite(offset) && Number.isFinite(limit)) {
@@ -201,32 +215,39 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
   /**
    * Get one
    * @param req
+   * @param trx
    */
-  public async getOne(req: CrudRequest): Promise<T> {
-    return this.getOneOrFail(req);
+  public async getOne(req: CrudRequest, trx?: Transaction): Promise<T> {
+    return this.getOneOrFail(req, trx);
   }
 
   /**
    * Create one
    * @param req
    * @param dto
+   * @param trx
    */
-  public async createOne(req: CrudRequest, dto: T): Promise<T> {
+  public async createOne(req: CrudRequest, dto: T, trx?: Transaction): Promise<T> {
     const entity = this.prepareEntityBeforeSave(dto, req.parsed.paramsFilter);
 
     if (!entity) {
       this.throwBadRequestException(`Empty data. Nothing to save.`);
     }
 
-    return this.modelClass.query().insert(entity);
+    return this.modelClass.query(trx).insert(entity);
   }
 
   /**
    * Create many
    * @param req
    * @param dto
+   * @param trx
    */
-  public async createMany(req: CrudRequest, dto: CreateManyDto<T>): Promise<T[]> {
+  public async createMany(
+    req: CrudRequest,
+    dto: CreateManyDto<T>,
+    trx?: Transaction,
+  ): Promise<T[]> {
     if (!isObject(dto) || !isArrayFull(dto.bulk)) {
       this.throwBadRequestException(`Empty data. Nothing to save.`);
     }
@@ -239,25 +260,26 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
       this.throwBadRequestException(`Empty data. Nothing to save.`);
     }
 
-    return transaction(this.modelClass, async (boundedModelClass) => {
+    return this.withTransaction(async (innerTrx) => {
       let result = [];
 
-      const chunks = toChunks(bulk, 10000);
+      const chunks = toChunks(bulk, CHUNK_SIZE);
       for (const chunk of chunks) {
-        result = result.concat(await boundedModelClass.query().insert(chunk));
+        result = result.concat(await this.modelClass.query(innerTrx).insert(chunk));
       }
 
       return result;
-    });
+    }, trx);
   }
 
   /**
    * Update one
    * @param req
    * @param dto
+   * @param trx
    */
-  public async updateOne(req: CrudRequest, dto: T): Promise<T> {
-    const found = await this.getOneOrFail(req);
+  public async updateOne(req: CrudRequest, dto: T, trx?: Transaction): Promise<T> {
+    const found = await this.getOneOrFail(req, trx);
 
     /* istanbul ignore else */
     if (
@@ -269,44 +291,76 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
       }
     }
 
-    return found
-      .$query()
-      .skipUndefined()
-      .patchAndFetch({ ...dto });
+    await found.$query(trx).patch({ ...dto });
+    return found;
   }
 
   /**
    * Replace one
    * @param req
    * @param dto
+   * @param trx
    */
-  public async replaceOne(req: CrudRequest, dto: T): Promise<T> {
-    // TODO: Implement UPSERT
-    throw new Error('Not Implemented for Objection.js');
-    /* istanbul ignore else */
-    // if (
-    //   hasLength(req.parsed.paramsFilter) &&
-    //   !req.options.routes.replaceOneBase.allowParamsOverride
-    // ) {
-    //   for (const filter of req.parsed.paramsFilter) {
-    //     dto[filter.field] = filter.value;
-    //   }
-    // }
+  public async replaceOne(req: CrudRequest, dto: T, trx?: Transaction): Promise<T> {
+    if (
+      hasLength(req.parsed.paramsFilter) &&
+      !req.options.routes.replaceOneBase.allowParamsOverride
+    ) {
+      for (const filter of req.parsed.paramsFilter) {
+        dto[filter.field] = filter.value;
+      }
+    }
 
-    // return this.repo.save<any>(dto);
+    const { condition, props } = objKeys(dto).reduce(
+      (result, column) => {
+        if (this.entityPrimaryColumns.includes(column)) {
+          result.condition[column] = dto[column];
+        } else {
+          result.props[column] = dto[column];
+        }
+        return result;
+      },
+      { condition: {}, props: {} },
+    );
+
+    if (Object.keys(condition).length === this.entityPrimaryColumns.length) {
+      if (!isObjectFull(props)) {
+        this.throwBadRequestException('Empty data. Nothing to update.');
+      }
+
+      const updatedEntity = await this.withTransaction(async (innerTrx) => {
+        const entity = await this.modelClass
+          .query(innerTrx)
+          .where(condition)
+          .first()
+          .limit(1)
+          .forUpdate();
+
+        if (entity) {
+          await entity.$query(innerTrx).patch(props);
+          return entity;
+        }
+      }, trx);
+
+      if (updatedEntity) {
+        return updatedEntity;
+      }
+    }
+
+    return this.modelClass.query(trx).insertAndFetch(props);
   }
 
   /**
    * Delete one
    * @param req
+   * @param trx
    */
-  public async deleteOne(req: CrudRequest): Promise<void | T> {
-    const found = await this.getOneOrFail(req);
-    await found.$query().delete();
+  public async deleteOne(req: CrudRequest, trx?: Transaction): Promise<void | T> {
+    const found = await this.getOneOrFail(req, trx);
+    await found.$query(trx).delete();
 
     /* istanbul ignore else */
     if (req.options.routes.deleteOneBase.returnDeleted) {
-      // set params, because id is undefined
       for (const filter of req.parsed.paramsFilter) {
         found[filter.field] = filter.value;
       }
@@ -315,9 +369,9 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     }
   }
 
-  private async getOneOrFail(req: CrudRequest): Promise<T> {
+  private async getOneOrFail(req: CrudRequest, trx?: Transaction): Promise<T> {
     const { parsed, options } = req;
-    const { builder } = await this.createBuilder(parsed, options);
+    const { builder } = await this.createBuilder(parsed, options, { trx });
     const found = await builder.limit(1).first();
 
     if (!found) {
@@ -329,15 +383,18 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
 
   private async createBuilder(
     parsedReq: ParsedRequestParams,
-    // This comes from @Crud({ ... })
     options: CrudRequestOptions,
-    many = true,
+    builderOptions: {
+      many?: boolean;
+      trx?: Transaction;
+    } = {},
   ) {
-    const builder = this.modelClass.query().skipUndefined();
+    const { many, trx } = { many: true, ...builderOptions };
+
+    const builder = this.modelClass.query(trx).skipUndefined();
     const select = this.getSelect(parsedReq, options.query);
     builder.select(select);
 
-    // set mandatory where condition from CrudOptions.query.filter
     if (isArrayFull(options.query.filter)) {
       options.query.filter.forEach((filter) => {
         this.setAndWhere(filter, builder);
@@ -403,7 +460,6 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
       });
     }
 
-    // set joins
     const joinOptions = options.query.join || {};
     const allowedJoins = objKeys(joinOptions);
 
@@ -434,7 +490,6 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
 
     /* istanbul ignore else */
     if (many) {
-      // set sort (order by)
       const sort = this.getSort(parsedReq, options.query);
       sort.forEach(({ column, order }) => builder.orderBy(column, order));
 
@@ -449,7 +504,6 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     }
 
     if (options.query.cache && parsedReq.cache !== 0) {
-      // TODO: Consider to throw an error in here instead of just printing a warning
       console.warn(`Objection.js doesn't support query caching`);
     }
 
@@ -458,7 +512,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     };
   }
 
-  private async onInitMapEntityColumns() {
+  private async initEntityColumns() {
     this.entityColumns = (await this.fetchTableMetadata(
       this.modelClass.tableName,
     )).columns.map((column) => {
@@ -615,7 +669,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     return !!this.entityRelationsHash[column];
   }
 
-  private async onInitMapRelations() {
+  private async initRelations() {
     const relations: ObjectionRelation[] = Object.values(
       this.getObjectionRelations(this.modelClass),
     );
@@ -642,8 +696,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
       columns: relationTableMeta.columns.map((col) => this.columnNameToPropertyName(col)),
       referencedColumns: objectionRelation.relatedProp.props.length
         ? objectionRelation.relatedProp.props
-        : // TODO: Most probably in here we only need to use relatedProps
-          objectionRelation.ownerProp.props,
+        : objectionRelation.ownerProp.props,
       ...overrides,
     };
   }
@@ -717,6 +770,10 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
   }
 }
 
+function unique(items: any[]) {
+  return [...new Set(items)];
+}
+
 function toChunks<T>(items: T[], size = 50): T[][] {
   const chunks = [];
   let currentChunk = [];
@@ -786,8 +843,4 @@ function getLimit(query: ParsedRequestParams, options: QueryOptions): number | n
   }
 
   return options.maxLimit ? options.maxLimit : null;
-}
-
-function unique(items: any[]) {
-  return [...new Set(items)];
 }

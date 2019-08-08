@@ -134,7 +134,7 @@ describe('#crud-objection', () => {
             expect(res.body.count).toBe(3);
             expect(res.body.total).toBe(10);
             expect(res.body.page).toBe(1);
-            expect(res.body.pageCount).toBe(3);
+            expect(res.body.pageCount).toBe(4);
             done();
           });
       });
@@ -181,7 +181,7 @@ describe('#crud-objection', () => {
             done();
           });
       });
-      it('should return an entiry with and set cache', (done) => {
+      it('should return a user entity', (done) => {
         return request(server)
           .get('/companies/1/users/1')
           .end((_, res) => {
@@ -200,6 +200,27 @@ describe('#crud-objection', () => {
           .send('')
           .end((_, res) => {
             expect(res.status).toBe(400);
+            expect(res.body.message.length).toBe(2);
+
+            expect(res.body.message[0].constraints.maxLength).toBe(
+              `name must be shorter than or equal to 100 characters`,
+            );
+            expect(res.body.message[0].constraints.isString).toBe(
+              `name must be a string`,
+            );
+            expect(res.body.message[0].constraints.isNotEmpty).toBe(
+              `name should not be empty`,
+            );
+
+            expect(res.body.message[1].constraints.maxLength).toBe(
+              `domain must be shorter than or equal to 100 characters`,
+            );
+            expect(res.body.message[1].constraints.isString).toBe(
+              `domain must be a string`,
+            );
+            expect(res.body.message[1].constraints.isNotEmpty).toBe(
+              `domain should not be empty`,
+            );
             done();
           });
       });
@@ -245,6 +266,10 @@ describe('#crud-objection', () => {
           .send(dto)
           .end((_, res) => {
             expect(res.status).toBe(400);
+            expect(res.body.message.length).toBe(1);
+            expect(res.body.message[0].constraints.arrayNotEmpty).toBe(
+              `bulk should not be empty`,
+            );
             done();
           });
       });
@@ -309,7 +334,7 @@ describe('#crud-objection', () => {
       });
     });
 
-    describe.skip('#replaceOneBase', () => {
+    describe('#replaceOneBase', () => {
       it('should create entity', (done) => {
         const dto = { name: 'updated0', domain: 'domain0' };
         return request(server)
@@ -322,13 +347,13 @@ describe('#crud-objection', () => {
           });
       });
       it('should return updated entity, 1', (done) => {
-        const dto = { name: 'updated0' };
+        const dto = { name: 'updated-foo' };
         return request(server)
           .put('/companies/1')
           .send(dto)
           .end((_, res) => {
             expect(res.status).toBe(200);
-            expect(res.body.name).toBe('updated0');
+            expect(res.body.name).toBe('updated-foo');
             done();
           });
       });
