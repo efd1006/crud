@@ -261,7 +261,7 @@ describe('#crud-objection', () => {
       });
     });
 
-    describe.only('#query nested join', () => {
+    describe('#query nested join', () => {
       it('should return status 400, 1', (done) => {
         const query = qb
           .setJoin({ field: 'company' })
