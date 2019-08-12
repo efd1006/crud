@@ -36,8 +36,8 @@ interface ModelRelation {
   path: string;
   objectionRelation: ObjectionRelation;
   tableName: string;
-  columns: string[];
-  referencedColumns: string[];
+  columnProps: string[];
+  referencedColumnProps: string[];
 }
 
 const CHUNK_SIZE = 10000;
@@ -46,95 +46,95 @@ const PATH_SEPARATOR = '.';
 
 const OPERATORS: {
   [operator: string]: (
-    column: string,
+    columnProp: string,
     val?: any,
-  ) => { column: string; operator: string; value?: any };
+  ) => { columnProp: string; operator: string; value?: any };
 } = {
-  eq: (column: string, val: any) => {
-    return { column, operator: '=', value: val };
+  eq: (columnProp: string, val: any) => {
+    return { columnProp, operator: '=', value: val };
   },
-  ne: (column: string, val: any) => {
-    return { column, operator: '!=', value: val };
+  ne: (columnProp: string, val: any) => {
+    return { columnProp, operator: '!=', value: val };
   },
-  gt: (column: string, val: any) => {
-    return { column, operator: '>', value: val };
+  gt: (columnProp: string, val: any) => {
+    return { columnProp, operator: '>', value: val };
   },
-  lt: (column: string, val: any) => {
-    return { column, operator: '<', value: val };
+  lt: (columnProp: string, val: any) => {
+    return { columnProp, operator: '<', value: val };
   },
-  gte: (column: string, val: any) => {
-    return { column, operator: '>=', value: val };
+  gte: (columnProp: string, val: any) => {
+    return { columnProp, operator: '>=', value: val };
   },
-  lte: (column: string, val: any) => {
-    return { column, operator: '<=', value: val };
+  lte: (columnProp: string, val: any) => {
+    return { columnProp, operator: '<=', value: val };
   },
-  starts: (column: string, val: any) => {
+  starts: (columnProp: string, val: any) => {
     return {
-      column,
+      columnProp,
       operator: 'LIKE',
       value: `${val}%`,
     };
   },
-  ends: (column: string, val: any) => {
+  ends: (columnProp: string, val: any) => {
     return {
-      column,
+      columnProp,
       operator: 'LIKE',
       value: `%${val}`,
     };
   },
-  cont: (column: string, val: any) => {
+  cont: (columnProp: string, val: any) => {
     return {
-      column,
+      columnProp,
       operator: 'LIKE',
       value: `%${val}%`,
     };
   },
-  excl: (column: string, val: any) => {
+  excl: (columnProp: string, val: any) => {
     return {
-      column,
+      columnProp,
       operator: 'NOT LIKE',
       value: `%${val}%`,
     };
   },
-  in: (column: string, val: any) => {
+  in: (columnProp: string, val: any) => {
     if (!isArrayFull(val)) {
-      throw new Error(`Invalid column '${column}' value`);
+      throw new Error(`Invalid column '${columnProp}' value`);
     }
     return {
-      column,
+      columnProp,
       operator: 'IN',
       value: val,
     };
   },
-  notin: (column: string, val: any) => {
+  notin: (columnProp: string, val: any) => {
     if (!isArrayFull(val)) {
-      throw new Error(`Invalid column '${column}' value`);
+      throw new Error(`Invalid column '${columnProp}' value`);
     }
     return {
-      column,
+      columnProp,
       operator: 'NOT IN',
       value: val,
     };
   },
-  isnull: (column: string) => {
+  isnull: (columnProp: string) => {
     return {
-      column,
+      columnProp,
       operator: 'IS NULL',
     };
   },
-  notnull: (column: string) => {
+  notnull: (columnProp: string) => {
     return {
-      column,
+      columnProp,
       operator: 'IS NOT NULL',
     };
   },
-  between: (column: string, val: any) => {
+  between: (columnProp: string, val: any) => {
     if (!Array.isArray(val) || val.length !== 2) {
-      throw new Error(`Invalid column '${column}' value`);
+      throw new Error(`Invalid column '${columnProp}' value`);
     }
 
     return {
-      column,
+      columnProp,
       operator: 'BETWEEN',
       value: [val[0], val[1]],
     };
@@ -143,10 +143,11 @@ const OPERATORS: {
 
 export class ObjectionCrudService<T extends Model> extends CrudService<T>
   implements OnModuleInit {
-  private entityColumns: string[];
-  private entityPrimaryColumns: string[];
-  private entityColumnsSet: Set<string> = new Set();
-  private entityRelationsHash: { [relationName: string]: ModelRelation } = {};
+  private modelColumnProps: string[];
+  private modelColumnPropsSet: Set<string> = new Set();
+  private modelIdColumnProps: string[];
+  private modelRelations: { [relationName: string]: ModelRelation } = {};
+  private notRecognizedModelRelations: Set<string> = new Set();
 
   constructor(public readonly modelClass: ModelClass<T>) {
     super();
@@ -154,8 +155,8 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
 
   async onModuleInit() {
     await this.fetchTableMetadata(this.modelClass.tableName);
-    await this.initRelations();
-    await this.initEntityColumns();
+    await this.initModelRelations();
+    await this.initModelColumnProps();
   }
 
   private async fetchTableMetadata(tableName: string) {
@@ -170,7 +171,11 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     return [].concat(this.modelClass.idColumn);
   }
 
-  private columnNameToPropertyName(column: string): string {
+  private isIdColumnProp(columnProp: string): boolean {
+    return this.modelIdColumnProps.includes(columnProp);
+  }
+
+  private columnToProp(column: string): string {
     return (Model as any).columnNameToPropertyName(column);
   }
 
@@ -226,13 +231,13 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
    * @param trx
    */
   public async createOne(req: CrudRequest, dto: T, trx?: Transaction): Promise<T> {
-    const entity = this.prepareEntityBeforeSave(dto, req.parsed.paramsFilter);
+    const model = this.prepareModelBeforeSave(dto, req.parsed.paramsFilter);
 
-    if (!entity) {
+    if (!model) {
       this.throwBadRequestException(`Empty data. Nothing to save.`);
     }
 
-    return this.modelClass.query(trx).insert(entity);
+    return this.modelClass.query(trx).insert(model);
   }
 
   /**
@@ -251,7 +256,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     }
 
     const bulk = dto.bulk
-      .map((one) => this.prepareEntityBeforeSave(one, req.parsed.paramsFilter))
+      .map((one) => this.prepareModelBeforeSave(one, req.parsed.paramsFilter))
       .filter((d) => !isUndefined(d));
 
     if (!hasLength(bulk)) {
@@ -310,38 +315,38 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     }
 
     const { condition, props } = objKeys(dto).reduce(
-      (result, column) => {
-        if (this.entityPrimaryColumns.includes(column)) {
-          result.condition[column] = dto[column];
+      (result, prop) => {
+        if (this.isIdColumnProp(prop)) {
+          result.condition[prop] = dto[prop];
         } else {
-          result.props[column] = dto[column];
+          result.props[prop] = dto[prop];
         }
         return result;
       },
       { condition: {}, props: {} },
     );
 
-    if (Object.keys(condition).length === this.entityPrimaryColumns.length) {
+    if (Object.keys(condition).length === this.modelIdColumnProps.length) {
       if (!isObjectFull(props)) {
         this.throwBadRequestException('Empty data. Nothing to update.');
       }
 
-      const updatedEntity = await this.withTransaction(async (innerTrx) => {
-        const entity = await this.modelClass
+      const updatedModel = await this.withTransaction(async (innerTrx) => {
+        const model = await this.modelClass
           .query(innerTrx)
           .where(condition)
           .first()
           .limit(1)
           .forUpdate();
 
-        if (entity) {
-          await entity.$query(innerTrx).patch(props);
-          return entity;
+        if (model) {
+          await model.$query(innerTrx).patch(props);
+          return model;
         }
       }, trx);
 
-      if (updatedEntity) {
-        return updatedEntity;
+      if (updatedModel) {
+        return updatedModel;
       }
     }
 
@@ -489,7 +494,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     /* istanbul ignore else */
     if (many) {
       const sort = this.getSort(parsedReq, options.query);
-      sort.forEach(({ column, order }) => builder.orderBy(column, order));
+      sort.forEach(({ columnProp, order }) => builder.orderBy(columnProp, order));
 
       const { offset, limit } = getOffsetLimit(parsedReq, options);
       if (Number.isFinite(limit)) {
@@ -502,6 +507,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     }
 
     if (options.query.cache && parsedReq.cache !== 0) {
+      // TODO: Consider implementing this in this module
       console.warn(`Objection.js doesn't support query caching`);
     }
 
@@ -510,21 +516,19 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     };
   }
 
-  private async initEntityColumns() {
-    this.entityColumns = (await this.fetchTableMetadata(
+  private async initModelColumnProps() {
+    this.modelColumnProps = (await this.fetchTableMetadata(
       this.modelClass.tableName,
     )).columns.map((column) => {
-      const propertyName = this.columnNameToPropertyName(column);
-      this.entityColumnsSet.add(propertyName);
-      return propertyName;
+      const columnProp = this.columnToProp(column);
+      this.modelColumnPropsSet.add(columnProp);
+      return columnProp;
     });
 
-    this.entityPrimaryColumns = this.idColumns.map((column) =>
-      this.columnNameToPropertyName(column),
-    );
+    this.modelIdColumnProps = this.idColumns.map((column) => this.columnToProp(column));
   }
 
-  private prepareEntityBeforeSave(dto: T, paramsFilter: QueryFilter[]): T {
+  private prepareModelBeforeSave(dto: T, paramsFilter: QueryFilter[]): T {
     if (!isObject(dto)) {
       return undefined;
     }
@@ -542,63 +546,70 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     return dto;
   }
 
-  private hasColumn(column: string): boolean {
-    return this.entityColumnsSet.has(column);
+  private hasColumnProp(columnProp: string): boolean {
+    return this.modelColumnPropsSet.has(columnProp);
   }
 
-  private getAllowedColumns(columns: string[], options: QueryOptions): string[] {
+  private hasModelRelationColumnProp(relationPath: string, columnProp: string): boolean {
+    return (
+      this.hasModelRelation(relationPath) &&
+      this.modelRelations[relationPath].columnProps.includes(columnProp)
+    );
+  }
+
+  private getAllowedColumnProps(columnProps: string[], options: QueryOptions): string[] {
     if (!isArrayFull(options.exclude) && !isArrayFull(options.allow)) {
-      return columns;
+      return columnProps;
     }
 
-    return columns.filter((column) => {
-      if (isArrayFull(options.exclude) && options.exclude.includes(column)) {
+    return columnProps.filter((columnProp) => {
+      if (isArrayFull(options.exclude) && options.exclude.includes(columnProp)) {
         return false;
       }
 
-      return isArrayFull(options.allow) ? options.allow.includes(column) : true;
+      return isArrayFull(options.allow) ? options.allow.includes(columnProp) : true;
     });
   }
 
   private setAndWhere(cond: QueryFilter, builder: QueryBuilder<T>) {
-    this.validateHasColumn(cond.field);
-    const { column, operator, value } = this.mapOperatorsToQuery(cond);
+    this.validateHasColumnProp(cond.field);
+    const { columnProp, operator, value } = this.mapOperatorsToQuery(cond);
 
     if (operator === 'IS NULL') {
-      builder.whereNull(column);
+      builder.whereNull(columnProp);
     } else if (operator === 'IS NOT NULL') {
-      builder.whereNotNull(column);
+      builder.whereNotNull(columnProp);
     } else {
-      builder.andWhere(column, operator, value);
+      builder.andWhere(columnProp, operator, value);
     }
   }
 
   private setOrWhere(cond: QueryFilter, builder: QueryBuilder<T>) {
-    this.validateHasColumn(cond.field);
-    const { column, operator, value } = this.mapOperatorsToQuery(cond);
+    this.validateHasColumnProp(cond.field);
+    const { columnProp, operator, value } = this.mapOperatorsToQuery(cond);
 
     if (operator === 'IS NULL') {
-      builder.orWhereNull(column);
+      builder.orWhereNull(columnProp);
     } else if (operator === 'IS NOT NULL') {
-      builder.orWhereNotNull(column);
+      builder.orWhereNotNull(columnProp);
     } else {
-      builder.orWhere(column, operator, value);
+      builder.orWhere(columnProp, operator, value);
     }
   }
 
   private getSelect(query: ParsedRequestParams, options: QueryOptions): string[] {
-    const allowed = this.getAllowedColumns(this.entityColumns, options);
+    const allowed = this.getAllowedColumnProps(this.modelColumnProps, options);
 
-    const columns = isArrayFull(query.fields)
-      ? query.fields.filter((field) => allowed.some((col) => field === col))
+    const columnProps = isArrayFull(query.fields)
+      ? query.fields.filter((field) => allowed.includes(field))
       : allowed;
 
     return unique(
       [
         ...(isArrayFull(options.persist) ? options.persist : []),
-        ...columns,
-        ...this.entityPrimaryColumns,
-      ].map((col) => this.getFieldWithAlias(col)),
+        ...columnProps,
+        ...this.modelIdColumnProps,
+      ].map((columnProp) => this.getColumnPropWithAlias(columnProp)),
     );
   }
 
@@ -614,74 +625,74 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     return [];
   }
 
-  private mapSort(sort: QuerySort[]): { column: string; order: string }[] {
+  private mapSort(sort: QuerySort[]): { columnProp: string; order: string }[] {
     return sort.map(({ field, order }) => {
-      this.validateHasColumn(field);
+      this.validateHasColumnProp(field);
       return {
-        column: this.getFieldWithAlias(field),
+        columnProp: this.getColumnPropWithAlias(field),
         order,
       };
     });
   }
 
-  private getFieldWithAlias(field: string) {
-    const { relations, prop } = splitPath(field);
-    if (!isPath(field)) {
-      return `${this.tableName}.${field}`;
+  private getColumnPropWithAlias(columnPropPath: string) {
+    const { relations, columnProp } = splitPath(columnPropPath);
+    if (!isPath(columnPropPath)) {
+      return `${this.tableName}.${columnPropPath}`;
     }
 
     if (relations.length === 1) {
-      return field;
+      return columnPropPath;
     }
 
-    return `${relations.join(OBJECTION_RELATION_SEPARATOR)}.${prop}`;
+    return `${relations.join(OBJECTION_RELATION_SEPARATOR)}.${columnProp}`;
   }
 
   private mapOperatorsToQuery(
     cond: QueryFilter,
-  ): { column: string; operator: string; value?: any } {
+  ): { columnProp: string; operator: string; value?: any } {
     try {
-      const normalizedColumn = this.getFieldWithAlias(cond.field);
+      const normalizedColumn = this.getColumnPropWithAlias(cond.field);
       return (OPERATORS[cond.operator] || OPERATORS.eq)(normalizedColumn, cond.value);
     } catch (e) {
       this.throwBadRequestException(e.message);
     }
   }
 
-  private validateHasColumn(path: string) {
+  private validateHasColumnProp(path: string) {
     if (isPath(path)) {
-      const { relations, prop } = splitPath(path);
+      const { relations, columnProp } = splitPath(path);
 
       const relationsPath = relations.join(PATH_SEPARATOR);
 
-      if (!this.hasRelation(relationsPath)) {
+      if (!this.hasModelRelation(relationsPath)) {
         this.throwBadRequestException(`Invalid relation name '${relationsPath}'`);
       }
 
-      if (!this.entityRelationsHash[relationsPath].columns.includes(prop)) {
+      if (!this.hasModelRelationColumnProp(relationsPath, columnProp)) {
         this.throwBadRequestException(
-          `Invalid column name '${prop}' for relation '${relationsPath}'`,
+          `Invalid column name '${columnProp}' for relation '${relationsPath}'`,
         );
       }
     } else {
-      if (!this.hasColumn(path)) {
+      if (!this.hasColumnProp(path)) {
         this.throwBadRequestException(`Invalid column name '${path}'`);
       }
     }
   }
 
-  private hasRelation(column: string): boolean {
-    return !!this.entityRelationsHash[column];
+  private hasModelRelation(relationPath: string): boolean {
+    return !!this.modelRelations[relationPath];
   }
 
-  private async initRelations() {
-    const relations: ObjectionRelation[] = Object.values(
+  private async initModelRelations() {
+    const objectionRelations: ObjectionRelation[] = Object.values(
       this.getObjectionRelations(this.modelClass),
     );
 
     await Promise.all(
-      relations.map(async (relation) => {
-        this.entityRelationsHash[relation.name] = await this.toModelRelation(relation);
+      objectionRelations.map(async (relation) => {
+        this.modelRelations[relation.name] = await this.toModelRelation(relation);
       }),
     );
   }
@@ -698,8 +709,8 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
       path: objectionRelation.name,
       objectionRelation,
       tableName: objectionRelation.relatedModelClass.tableName,
-      columns: relationTableMeta.columns.map((col) => this.columnNameToPropertyName(col)),
-      referencedColumns: objectionRelation.relatedProp.props.length
+      columnProps: relationTableMeta.columns.map((col) => this.columnToProp(col)),
+      referencedColumnProps: objectionRelation.relatedProp.props.length
         ? objectionRelation.relatedProp.props
         : objectionRelation.ownerProp.props,
       ...overrides,
@@ -707,12 +718,12 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
   }
 
   private getObjectionRelationByPath(relationPath: string): ObjectionRelation {
-    const { relations: parentRelationNames, prop: targetRelationName } = splitPath(
+    const { relations: parentRelationNames, columnProp: targetRelationName } = splitPath(
       relationPath,
     );
 
     const parentRelationPath = parentRelationNames.join(PATH_SEPARATOR);
-    const parentRelation = this.entityRelationsHash[parentRelationPath];
+    const parentRelation = this.modelRelations[parentRelationPath];
 
     if (!parentRelation) {
       return null;
@@ -735,36 +746,38 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     joinOptions: JoinOptions,
     builder: QueryBuilder<T>,
   ) {
-    if (isUndefined(this.entityRelationsHash[cond.field]) && isPath(cond.field)) {
+    if (!this.notRecognizedModelRelations.has(cond.field) && isPath(cond.field)) {
       const objectionRelation = this.getObjectionRelationByPath(cond.field);
       if (!objectionRelation) {
-        this.entityRelationsHash[cond.field] = null;
+        this.notRecognizedModelRelations.add(cond.field);
         return;
       }
 
-      this.entityRelationsHash[cond.field] = await this.toModelRelation(
-        objectionRelation,
-        { path: cond.field },
-      );
+      this.modelRelations[cond.field] = await this.toModelRelation(objectionRelation, {
+        path: cond.field,
+      });
     }
 
-    if (cond.field && this.entityRelationsHash[cond.field] && joinOptions[cond.field]) {
-      const relation = this.entityRelationsHash[cond.field];
+    if (cond.field && this.hasModelRelation(cond.field) && joinOptions[cond.field]) {
+      const relation = this.modelRelations[cond.field];
       const options = joinOptions[cond.field];
-      const allowedColumns = this.getAllowedColumns(relation.columns, options);
+      const allowedColumnProps = this.getAllowedColumnProps(
+        relation.columnProps,
+        options,
+      );
 
-      if (!allowedColumns.length) {
+      if (!allowedColumnProps.length) {
         return;
       }
 
-      const columns = isArrayFull(cond.select)
-        ? cond.select.filter((col) => allowedColumns.includes(col))
-        : allowedColumns;
+      const columnProps = isArrayFull(cond.select)
+        ? cond.select.filter((col) => allowedColumnProps.includes(col))
+        : allowedColumnProps;
 
       const select = unique([
-        ...relation.referencedColumns,
+        ...relation.referencedColumnProps,
         ...(isArrayFull(options.persist) ? options.persist : []),
-        ...columns,
+        ...columnProps,
       ]);
 
       builder
@@ -778,11 +791,11 @@ function unique<T>(items: T[]): T[] {
   return [...new Set(items)];
 }
 
-function splitPath(path: string): { relations: string[]; prop: string } {
+function splitPath(path: string): { relations: string[]; columnProp: string } {
   const items = path.split(PATH_SEPARATOR);
   return {
     relations: items.slice(0, items.length - 1),
-    prop: items[items.length - 1],
+    columnProp: items[items.length - 1],
   };
 }
 
