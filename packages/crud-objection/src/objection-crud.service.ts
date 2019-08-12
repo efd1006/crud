@@ -14,14 +14,7 @@ import {
   QuerySort,
   CondOperator,
 } from '@nestjsx/crud-request';
-import {
-  hasLength,
-  isArrayFull,
-  isObjectFull,
-  isObject,
-  isUndefined,
-  objKeys,
-} from '@nestjsx/util';
+import { hasLength, isArrayFull, isObject, isUndefined, objKeys } from '@nestjsx/util';
 import {
   Model,
   ModelClass,
@@ -175,10 +168,6 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     return [].concat(this.modelClass.idColumn);
   }
 
-  private isIdColumnProp(columnProp: string): boolean {
-    return this.modelIdColumnProps.includes(columnProp);
-  }
-
   private columnToProp(column: string): string {
     return (Model as any).columnNameToPropertyName(column);
   }
@@ -234,7 +223,11 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
    * @param dto
    * @param trx
    */
-  public async createOne(req: CrudRequest, dto: T, trx?: Transaction): Promise<T> {
+  public async createOne(
+    req: CrudRequest,
+    dto: Partial<T>,
+    trx?: Transaction,
+  ): Promise<T> {
     const model = this.prepareModelBeforeSave(dto, req.parsed.paramsFilter);
 
     /* istanbul ignore if */
@@ -242,7 +235,10 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
       this.throwBadRequestException(`Empty data. Nothing to save.`);
     }
 
-    return this.modelClass.query(trx).insert(model);
+    return this.withTransaction((innerTrx) => {
+      // @ts-ignore
+      return this.modelClass.query(innerTrx).insertGraph(model);
+    }, trx);
   }
 
   /**
@@ -253,7 +249,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
    */
   public async createMany(
     req: CrudRequest,
-    dto: CreateManyDto<T>,
+    dto: CreateManyDto<Partial<T>>,
     trx?: Transaction,
   ): Promise<T[]> {
     /* istanbul ignore if */
@@ -275,7 +271,8 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
 
       const chunks = toChunks(bulk);
       for (const chunk of chunks) {
-        result = result.concat(await this.modelClass.query(innerTrx).insert(chunk));
+        // @ts-ignore
+        result = result.concat(await this.modelClass.query(innerTrx).insertGraph(chunk));
       }
 
       return result;
@@ -288,7 +285,11 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
    * @param dto
    * @param trx
    */
-  public async updateOne(req: CrudRequest, dto: T, trx?: Transaction): Promise<T> {
+  public async updateOne(
+    req: CrudRequest,
+    dto: Partial<T>,
+    trx?: Transaction,
+  ): Promise<T> {
     const found = await this.getOneOrFail(req, trx);
 
     /* istanbul ignore else */
@@ -301,8 +302,18 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
       }
     }
 
-    await found.$query(trx).patch({ ...dto });
-    return found;
+    return this.withTransaction((innerTrx) => {
+      // @ts-ignore
+      return found.$query(innerTrx).upsertGraph(
+        { ...found, ...dto },
+        {
+          noDelete: true,
+          noInsert: true,
+          noRelate: true,
+          noUnrelate: true,
+        },
+      );
+    }, trx);
   }
 
   /**
@@ -311,7 +322,11 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
    * @param dto
    * @param trx
    */
-  public async replaceOne(req: CrudRequest, dto: T, trx?: Transaction): Promise<T> {
+  public async replaceOne(
+    req: CrudRequest,
+    dto: Partial<T>,
+    trx?: Transaction,
+  ): Promise<T> {
     /* istanbul ignore else */
     if (
       hasLength(req.parsed.paramsFilter) &&
@@ -322,48 +337,13 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
       }
     }
 
-    const { condition, props } = objKeys(dto).reduce(
-      (result, prop) => {
-        if (this.isIdColumnProp(prop)) {
-          result.condition[prop] = dto[prop];
-        } else {
-          result.props[prop] = dto[prop];
-        }
-        return result;
-      },
-      { condition: {}, props: {} },
-    );
-
-    /* istanbul ignore else */
-    if (Object.keys(condition).length === this.modelIdColumnProps.length) {
-      /* istanbul ignore if */
-      if (!isObjectFull(props)) {
-        this.throwBadRequestException('Empty data. Nothing to update.');
-      }
-
-      const updatedModel = await this.withTransaction(async (innerTrx) => {
-        const model = await this.modelClass
-          .query(innerTrx)
-          .where(condition)
-          .first()
-          .limit(1)
-          .forUpdate();
-
-        /* istanbul ignore else */
-        if (model) {
-          await model.$query(innerTrx).patch(props);
-          return model;
-        }
-      }, trx);
-
-      /* istanbul ignore else */
-      if (updatedModel) {
-        return updatedModel;
-      }
-    }
-
-    /* istanbul ignore next */
-    return this.modelClass.query(trx).insertAndFetch(props);
+    return this.withTransaction((innerTrx) => {
+      // @ts-ignore
+      return this.modelClass.query(innerTrx).upsertGraph(dto, {
+        noDelete: true,
+        noUnrelate: true,
+      });
+    }, trx);
   }
 
   /**
@@ -541,7 +521,10 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     this.modelIdColumnProps = this.idColumns.map((column) => this.columnToProp(column));
   }
 
-  private prepareModelBeforeSave(dto: T, paramsFilter: QueryFilter[]): T {
+  private prepareModelBeforeSave(
+    dto: Partial<T>,
+    paramsFilter: QueryFilter[],
+  ): Partial<T> {
     /* istanbul ignore if */
     if (!isObject(dto)) {
       return undefined;

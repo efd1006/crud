@@ -253,6 +253,8 @@ describe('#crud-objection', () => {
             expect(res.status).toBe(201);
             expect(res.body.id).toBeTruthy();
             expect(res.body.companyId).toBe(1);
+            expect(res.body.profile).toBeTruthy();
+            expect(res.body.profile.name).toBe('testName');
             done();
           });
       });
