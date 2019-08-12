@@ -13,6 +13,8 @@ export async function up(knex: Knex) {
       .unique();
 
     t.text('description').nullable();
+
+    t.timestamps();
   });
 }
 

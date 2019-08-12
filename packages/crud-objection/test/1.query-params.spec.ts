@@ -224,6 +224,21 @@ describe('#crud-objection', () => {
             done();
           });
       });
+      it('should return with filter and or, 7', (done) => {
+        const query = qb
+          .setFilter({ field: 'name', operator: 'eq', value: 'Name2' })
+          .setOr({ field: 'description', operator: 'notnull' })
+          .query();
+        return request(server)
+          .get('/companies')
+          .query(query)
+          .end((_, res) => {
+            expect(res.status).toBe(200);
+            expect(res.body.length).toBe(1);
+            expect(res.body[0].description || res.body[0].name === 'Name2').toBe(true);
+            done();
+          });
+      });
       it('should return with filter, 1', (done) => {
         const query = qb.setOr({ field: 'companyId', operator: 'eq', value: 1 }).query();
         return request(server)
@@ -232,6 +247,34 @@ describe('#crud-objection', () => {
           .end((_, res) => {
             expect(res.status).toBe(200);
             expect(res.body.length).toBe(2);
+            done();
+          });
+      });
+      it('should return with filter, 2', (done) => {
+        const query = qb.setFilter({ field: 'description', operator: 'isnull' }).query();
+        return request(server)
+          .get('/companies')
+          .query(query)
+          .end((_, res) => {
+            expect(res.status).toBe(200);
+            expect(res.body.length).toBe(5);
+            res.body.forEach((company) => {
+              expect(company.description).toBeNull();
+            });
+            done();
+          });
+      });
+      it('should return with filter, 3: only allowed props get returned', (done) => {
+        const query = qb.select(['id', 'updatedAt']).query();
+        return request(server)
+          .get('/projects')
+          .query(query)
+          .end((_, res) => {
+            expect(res.status).toBe(200);
+            res.body.forEach((project) => {
+              expect(project.id).toBeTruthy();
+              expect(project.updatedAt).toBeNull();
+            });
             done();
           });
       });

@@ -19,6 +19,8 @@ export async function up(knex: Knex) {
       .onDelete('CASCADE');
 
     t.unique(['user_id', 'project_id']);
+
+    t.timestamps();
   });
 }
 

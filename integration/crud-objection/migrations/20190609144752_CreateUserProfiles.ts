@@ -7,6 +7,8 @@ export async function up(knex: Knex) {
     t.increments();
 
     t.string('name', 32).nullable();
+
+    t.timestamps();
   });
 }
 

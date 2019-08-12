@@ -273,28 +273,32 @@ describe('#crud-objection', () => {
             done();
           });
       });
-      it('should return created entities', (done) => {
-        const dto = {
-          bulk: [
-            {
-              name: 'test1',
-              domain: 'test1',
-            },
-            {
-              name: 'test2',
-              domain: 'test2',
-            },
-          ],
-        };
-        return request(server)
-          .post('/companies/bulk')
-          .send(dto)
-          .end((_, res) => {
-            expect(res.status).toBe(201);
-            expect(res.body[0].id).toBeTruthy();
-            expect(res.body[1].id).toBeTruthy();
-            done();
-          });
+      [
+        { companyPrefix: 'foo', amount: 50 },
+        { companyPrefix: 'bar', amount: 1001 },
+      ].forEach(({ amount, companyPrefix }) => {
+        it(`should return ${amount} created entities for ${companyPrefix}-* companies`, (done) => {
+          const dto = {
+            bulk: Array.from({ length: amount }, (_, idx: number) => {
+              return {
+                name: `${companyPrefix}-${idx}`,
+                domain: `${companyPrefix}-${idx}`,
+              };
+            }),
+          };
+          return request(server)
+            .post('/companies/bulk')
+            .send(dto)
+            .end((_, res) => {
+              expect(res.status).toBe(201);
+              expect(res.body.length).toBe(amount);
+              res.body.forEach((company) => {
+                expect(company.id).toBeTruthy();
+              });
+
+              done();
+            });
+        });
       });
     });
 
@@ -302,7 +306,7 @@ describe('#crud-objection', () => {
       it('should return status 404', (done) => {
         const dto = { name: 'updated0' };
         return request(server)
-          .patch('/companies/333')
+          .patch('/companies/33333333')
           .send(dto)
           .end((_, res) => {
             expect(res.status).toBe(404);
@@ -335,7 +339,7 @@ describe('#crud-objection', () => {
     });
 
     describe('#replaceOneBase', () => {
-      it('should create entity', (done) => {
+      it('should create entity, 1', (done) => {
         const dto = { name: 'updated0', domain: 'domain0' };
         return request(server)
           .put('/companies/333')
@@ -362,7 +366,7 @@ describe('#crud-objection', () => {
     describe('#deleteOneBase', () => {
       it('should return status 404', (done) => {
         return request(server)
-          .delete('/companies/333')
+          .delete('/companies/33333333')
           .end((_, res) => {
             expect(res.status).toBe(404);
             done();

@@ -12,6 +12,7 @@ import {
   QueryFilter,
   QueryJoin,
   QuerySort,
+  CondOperator,
 } from '@nestjsx/crud-request';
 import {
   hasLength,
@@ -40,7 +41,7 @@ interface ModelRelation {
   referencedColumnProps: string[];
 }
 
-const CHUNK_SIZE = 10000;
+const CHUNK_SIZE = 1000;
 const OBJECTION_RELATION_SEPARATOR = ':';
 const PATH_SEPARATOR = '.';
 
@@ -50,53 +51,54 @@ const OPERATORS: {
     val?: any,
   ) => { columnProp: string; operator: string; value?: any };
 } = {
-  eq: (columnProp: string, val: any) => {
+  [CondOperator.EQUALS]: (columnProp: string, val: any) => {
     return { columnProp, operator: '=', value: val };
   },
-  ne: (columnProp: string, val: any) => {
+  [CondOperator.NOT_EQUALS]: (columnProp: string, val: any) => {
     return { columnProp, operator: '!=', value: val };
   },
-  gt: (columnProp: string, val: any) => {
+  [CondOperator.GREATER_THAN]: (columnProp: string, val: any) => {
     return { columnProp, operator: '>', value: val };
   },
-  lt: (columnProp: string, val: any) => {
+  [CondOperator.LOWER_THAN]: (columnProp: string, val: any) => {
     return { columnProp, operator: '<', value: val };
   },
-  gte: (columnProp: string, val: any) => {
+  [CondOperator.GREATER_THAN_EQUALS]: (columnProp: string, val: any) => {
     return { columnProp, operator: '>=', value: val };
   },
-  lte: (columnProp: string, val: any) => {
+  [CondOperator.LOWER_THAN_EQAULS]: (columnProp: string, val: any) => {
     return { columnProp, operator: '<=', value: val };
   },
-  starts: (columnProp: string, val: any) => {
+  [CondOperator.STARTS]: (columnProp: string, val: any) => {
     return {
       columnProp,
       operator: 'LIKE',
       value: `${val}%`,
     };
   },
-  ends: (columnProp: string, val: any) => {
+  [CondOperator.ENDS]: (columnProp: string, val: any) => {
     return {
       columnProp,
       operator: 'LIKE',
       value: `%${val}`,
     };
   },
-  cont: (columnProp: string, val: any) => {
+  [CondOperator.CONTAINS]: (columnProp: string, val: any) => {
     return {
       columnProp,
       operator: 'LIKE',
       value: `%${val}%`,
     };
   },
-  excl: (columnProp: string, val: any) => {
+  [CondOperator.EXCLUDES]: (columnProp: string, val: any) => {
     return {
       columnProp,
       operator: 'NOT LIKE',
       value: `%${val}%`,
     };
   },
-  in: (columnProp: string, val: any) => {
+  [CondOperator.IN]: (columnProp: string, val: any) => {
+    /* istanbul ignore if */
     if (!isArrayFull(val)) {
       throw new Error(`Invalid column '${columnProp}' value`);
     }
@@ -106,7 +108,8 @@ const OPERATORS: {
       value: val,
     };
   },
-  notin: (columnProp: string, val: any) => {
+  [CondOperator.NOT_IN]: (columnProp: string, val: any) => {
+    /* istanbul ignore if */
     if (!isArrayFull(val)) {
       throw new Error(`Invalid column '${columnProp}' value`);
     }
@@ -116,19 +119,20 @@ const OPERATORS: {
       value: val,
     };
   },
-  isnull: (columnProp: string) => {
+  [CondOperator.IS_NULL]: (columnProp: string) => {
     return {
       columnProp,
       operator: 'IS NULL',
     };
   },
-  notnull: (columnProp: string) => {
+  [CondOperator.NOT_NULL]: (columnProp: string) => {
     return {
       columnProp,
       operator: 'IS NOT NULL',
     };
   },
-  between: (columnProp: string, val: any) => {
+  [CondOperator.BETWEEN]: (columnProp: string, val: any) => {
+    /* istanbul ignore if */
     if (!Array.isArray(val) || val.length !== 2) {
       throw new Error(`Invalid column '${columnProp}' value`);
     }
@@ -233,6 +237,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
   public async createOne(req: CrudRequest, dto: T, trx?: Transaction): Promise<T> {
     const model = this.prepareModelBeforeSave(dto, req.parsed.paramsFilter);
 
+    /* istanbul ignore if */
     if (!model) {
       this.throwBadRequestException(`Empty data. Nothing to save.`);
     }
@@ -251,6 +256,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     dto: CreateManyDto<T>,
     trx?: Transaction,
   ): Promise<T[]> {
+    /* istanbul ignore if */
     if (!isObject(dto) || !isArrayFull(dto.bulk)) {
       this.throwBadRequestException(`Empty data. Nothing to save.`);
     }
@@ -259,6 +265,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
       .map((one) => this.prepareModelBeforeSave(one, req.parsed.paramsFilter))
       .filter((d) => !isUndefined(d));
 
+    /* istanbul ignore if */
     if (!hasLength(bulk)) {
       this.throwBadRequestException(`Empty data. Nothing to save.`);
     }
@@ -266,7 +273,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     return this.withTransaction(async (innerTrx) => {
       let result = [];
 
-      const chunks = toChunks(bulk, CHUNK_SIZE);
+      const chunks = toChunks(bulk);
       for (const chunk of chunks) {
         result = result.concat(await this.modelClass.query(innerTrx).insert(chunk));
       }
@@ -305,6 +312,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
    * @param trx
    */
   public async replaceOne(req: CrudRequest, dto: T, trx?: Transaction): Promise<T> {
+    /* istanbul ignore else */
     if (
       hasLength(req.parsed.paramsFilter) &&
       !req.options.routes.replaceOneBase.allowParamsOverride
@@ -326,7 +334,9 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
       { condition: {}, props: {} },
     );
 
+    /* istanbul ignore else */
     if (Object.keys(condition).length === this.modelIdColumnProps.length) {
+      /* istanbul ignore if */
       if (!isObjectFull(props)) {
         this.throwBadRequestException('Empty data. Nothing to update.');
       }
@@ -339,17 +349,20 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
           .limit(1)
           .forUpdate();
 
+        /* istanbul ignore else */
         if (model) {
           await model.$query(innerTrx).patch(props);
           return model;
         }
       }, trx);
 
+      /* istanbul ignore else */
       if (updatedModel) {
         return updatedModel;
       }
     }
 
+    /* istanbul ignore next */
     return this.modelClass.query(trx).insertAndFetch(props);
   }
 
@@ -390,7 +403,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     builderOptions: {
       many?: boolean;
       trx?: Transaction;
-    } = {},
+    },
   ) {
     const { many, trx } = { many: true, ...builderOptions };
 
@@ -529,6 +542,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
   }
 
   private prepareModelBeforeSave(dto: T, paramsFilter: QueryFilter[]): T {
+    /* istanbul ignore if */
     if (!isObject(dto)) {
       return undefined;
     }
@@ -539,6 +553,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
       }
     }
 
+    /* istanbul ignore if */
     if (!hasLength(objKeys(dto))) {
       return undefined;
     }
@@ -653,8 +668,13 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
   ): { columnProp: string; operator: string; value?: any } {
     try {
       const normalizedColumn = this.getColumnPropWithAlias(cond.field);
-      return (OPERATORS[cond.operator] || OPERATORS.eq)(normalizedColumn, cond.value);
+      return (OPERATORS[cond.operator] ||
+        /* istanbul ignore next */ OPERATORS[CondOperator.EQUALS])(
+        normalizedColumn,
+        cond.value,
+      );
     } catch (e) {
+      /* istanbul ignore next */
       this.throwBadRequestException(e.message);
     }
   }
@@ -710,9 +730,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
       objectionRelation,
       tableName: objectionRelation.relatedModelClass.tableName,
       columnProps: relationTableMeta.columns.map((col) => this.columnToProp(col)),
-      referencedColumnProps: objectionRelation.relatedProp.props.length
-        ? objectionRelation.relatedProp.props
-        : objectionRelation.ownerProp.props,
+      referencedColumnProps: objectionRelation.relatedProp.props,
       ...overrides,
     };
   }
@@ -725,6 +743,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     const parentRelationPath = parentRelationNames.join(PATH_SEPARATOR);
     const parentRelation = this.modelRelations[parentRelationPath];
 
+    /* istanbul ignore if */
     if (!parentRelation) {
       return null;
     }
@@ -758,6 +777,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
       });
     }
 
+    /* istanbul ignore else */
     if (cond.field && this.hasModelRelation(cond.field) && joinOptions[cond.field]) {
       const relation = this.modelRelations[cond.field];
       const options = joinOptions[cond.field];
@@ -766,6 +786,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
         options,
       );
 
+      /* istanbul ignore if */
       if (!allowedColumnProps.length) {
         return;
       }
@@ -803,11 +824,16 @@ function isPath(path: string) {
   return path.includes(PATH_SEPARATOR);
 }
 
-function toChunks<T>(items: T[], size = 50): T[][] {
+function toChunks<T>(items: T[], size = CHUNK_SIZE): T[][] {
+  if (items.length < size) {
+    return [items];
+  }
+
   const chunks = [];
   let currentChunk = [];
 
   items.forEach((item) => {
+    /* istanbul ignore if */
     if (currentChunk.length > size) {
       currentChunk = [];
       chunks.push(currentChunk);
@@ -816,6 +842,7 @@ function toChunks<T>(items: T[], size = 50): T[][] {
     currentChunk.push(item);
   });
 
+  /* istanbul ignore else */
   if (currentChunk.length) {
     chunks.push(currentChunk);
   }
@@ -860,6 +887,7 @@ function getLimit(query: ParsedRequestParams, options: QueryOptions): number | n
     return query.limit;
   }
 
+  /* istanbul ignore if */
   if (options.limit) {
     if (options.maxLimit) {
       if (options.limit <= options.maxLimit) {

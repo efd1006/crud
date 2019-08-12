@@ -25,6 +25,7 @@ export async function up(knex: Knex) {
       .inTable('user_profiles')
       .onDelete('CASCADE');
 
+    t.timestamps();
   });
 }
 
