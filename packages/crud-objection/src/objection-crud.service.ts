@@ -41,6 +41,8 @@ interface ModelRelation {
 }
 
 const CHUNK_SIZE = 10000;
+const OBJECTION_RELATION_SEPARATOR = ':';
+const PATH_SEPARATOR = '.';
 
 const OPERATORS: {
   [operator: string]: (
@@ -160,12 +162,8 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     return Model.fetchTableMetadata({ table: tableName });
   }
 
-  private get alias(): string {
+  private get tableName(): string {
     return this.modelClass.tableName;
-  }
-
-  private toAliased(prop: string) {
-    return `${this.alias}.${prop}`;
   }
 
   private get idColumns(): string[] {
@@ -375,7 +373,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     const found = await builder.limit(1).first();
 
     if (!found) {
-      this.throwNotFoundException(this.alias);
+      this.throwNotFoundException(this.tableName);
     }
 
     return found;
@@ -600,7 +598,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
         ...(isArrayFull(options.persist) ? options.persist : []),
         ...columns,
         ...this.entityPrimaryColumns,
-      ].map((col) => this.toAliased(col)),
+      ].map((col) => this.getFieldWithAlias(col)),
     );
   }
 
@@ -620,19 +618,30 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     return sort.map(({ field, order }) => {
       this.validateHasColumn(field);
       return {
-        column: this.toAliased(field),
+        column: this.getFieldWithAlias(field),
         order,
       };
     });
+  }
+
+  private getFieldWithAlias(field: string) {
+    const { relations, prop } = splitPath(field);
+    if (!isPath(field)) {
+      return `${this.tableName}.${field}`;
+    }
+
+    if (relations.length === 1) {
+      return field;
+    }
+
+    return `${relations.join(OBJECTION_RELATION_SEPARATOR)}.${prop}`;
   }
 
   private mapOperatorsToQuery(
     cond: QueryFilter,
   ): { column: string; operator: string; value?: any } {
     try {
-      const normalizedColumn = cond.field.includes('.')
-        ? cond.field
-        : `${this.toAliased(cond.field)}`;
+      const normalizedColumn = this.getFieldWithAlias(cond.field);
       return (OPERATORS[cond.operator] || OPERATORS.eq)(normalizedColumn, cond.value);
     } catch (e) {
       this.throwBadRequestException(e.message);
@@ -640,22 +649,18 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
   }
 
   private validateHasColumn(path: string) {
-    if (path.includes('.')) {
-      const [relation, column, ...extra] = path.split('.');
+    if (isPath(path)) {
+      const { relations, prop } = splitPath(path);
 
-      if (isArrayFull(extra)) {
-        this.throwBadRequestException(
-          `Too many nested levels! Usage: '[join=<other-relation>&]join=[<other-relation>.]<relation>&filter=<relation>.<field>||op||val'`,
-        );
+      const relationsPath = relations.join(PATH_SEPARATOR);
+
+      if (!this.hasRelation(relationsPath)) {
+        this.throwBadRequestException(`Invalid relation name '${relationsPath}'`);
       }
 
-      if (!this.hasRelation(relation)) {
-        this.throwBadRequestException(`Invalid relation name '${relation}'`);
-      }
-
-      if (!this.entityRelationsHash[relation].columns.includes(column)) {
+      if (!this.entityRelationsHash[relationsPath].columns.includes(prop)) {
         this.throwBadRequestException(
-          `Invalid column name '${column}' for relation '${relation}'`,
+          `Invalid column name '${prop}' for relation '${relationsPath}'`,
         );
       }
     } else {
@@ -702,12 +707,11 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
   }
 
   private getObjectionRelationByPath(relationPath: string): ObjectionRelation {
-    const relationNames = relationPath.split('.');
+    const { relations: parentRelationNames, prop: targetRelationName } = splitPath(
+      relationPath,
+    );
 
-    const targetRelationName = relationNames[relationNames.length - 1];
-
-    const parentRelationNames = relationNames.slice(0, relationNames.length - 1);
-    const parentRelationPath = parentRelationNames.join('.');
+    const parentRelationPath = parentRelationNames.join(PATH_SEPARATOR);
     const parentRelation = this.entityRelationsHash[parentRelationPath];
 
     if (!parentRelation) {
@@ -731,7 +735,7 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
     joinOptions: JoinOptions,
     builder: QueryBuilder<T>,
   ) {
-    if (isUndefined(this.entityRelationsHash[cond.field]) && cond.field.includes('.')) {
+    if (isUndefined(this.entityRelationsHash[cond.field]) && isPath(cond.field)) {
       const objectionRelation = this.getObjectionRelationByPath(cond.field);
       if (!objectionRelation) {
         this.entityRelationsHash[cond.field] = null;
@@ -770,8 +774,20 @@ export class ObjectionCrudService<T extends Model> extends CrudService<T>
   }
 }
 
-function unique(items: any[]) {
+function unique<T>(items: T[]): T[] {
   return [...new Set(items)];
+}
+
+function splitPath(path: string): { relations: string[]; prop: string } {
+  const items = path.split(PATH_SEPARATOR);
+  return {
+    relations: items.slice(0, items.length - 1),
+    prop: items[items.length - 1],
+  };
+}
+
+function isPath(path: string) {
+  return path.includes(PATH_SEPARATOR);
 }
 
 function toChunks<T>(items: T[], size = 50): T[][] {

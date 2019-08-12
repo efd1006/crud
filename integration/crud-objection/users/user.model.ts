@@ -44,7 +44,7 @@ export class User extends BaseModel {
   @ValidateNested({ always: true })
   @IsOptional({ groups: [UPDATE] })
   @IsNotEmpty({ groups: [CREATE] })
-  @Type((t) => UserProfile)
+  @Type(t => UserProfile)
   profile?: Partial<UserProfile>;
 
   company?: Company;
