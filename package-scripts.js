@@ -19,7 +19,7 @@ const getBuildCmd = (pkg) => {
 };
 
 const getTestCmd = (pkg, coverage) =>
-  `npx jest -c=jest.config.js packages/${pkg ? pkg + '/' : ''} ${
+  `npx jest -c=jest.config.js --detectOpenHandles packages/${pkg ? pkg + '/' : ''} ${
     coverage ? '--coverage' : ''
   } --verbose`;
 
@@ -31,7 +31,7 @@ const setBuild = () =>
 const setTest = () =>
   names.reduce((a, c) => ({ ...a, [c]: getTestCmd(c) }), {
     default: getTestCmd(false, true),
-    coveralls: getTestCmd(false, true) + ' --coverageReporters=text-lcov | coveralls',
+    coveralls: getTestCmd(false, true) + ' ',
   });
 
 module.exports = {

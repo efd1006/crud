@@ -7,6 +7,8 @@ env:
   - DOCKER_COMPOSE_VERSION=1.23.1
 
 before_install:
+  - curl -o- -L https://yarnpkg.com/install.sh | bash -s -- --version 1.17.3
+  - export PATH=$HOME/.yarn/bin:$PATH
   - sudo rm /usr/local/bin/docker-compose
   - curl -L https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-`uname -s`-`uname -m` > docker-compose
   - chmod +x docker-compose

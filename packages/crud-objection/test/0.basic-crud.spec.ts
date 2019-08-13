@@ -1,4 +1,5 @@
 import * as request from 'supertest';
+import * as Knex from 'knex';
 import { Test } from '@nestjs/testing';
 import { Controller, INestApplication } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
@@ -11,6 +12,7 @@ import { User } from '../../../integration/crud-objection/users';
 import { CompaniesService } from './__fixture__/companies.service';
 import { UsersService } from './__fixture__/users.service';
 import { DatabaseModule } from '../../../integration/crud-objection/database.module';
+import { KNEX_CONNECTION } from '../../../integration/crud-objection/injection-tokens';
 
 describe('#crud-objection', () => {
   describe('#basic crud', () => {
@@ -18,6 +20,7 @@ describe('#crud-objection', () => {
     let server: any;
     let qb: RequestQueryBuilder;
     let service: CompaniesService;
+    let knex: Knex;
 
     @Crud({
       model: { type: Company },
@@ -71,6 +74,7 @@ describe('#crud-objection', () => {
 
       app = fixture.createNestApplication();
       service = app.get<CompaniesService>(CompaniesService);
+      knex = app.get<Knex>(KNEX_CONNECTION);
 
       await app.init();
       server = app.getHttpServer();
@@ -81,7 +85,8 @@ describe('#crud-objection', () => {
     });
 
     afterAll(async () => {
-      app.close();
+      await app.close();
+      await knex.destroy();
     });
 
     describe('#find', () => {
